@@ -62,7 +62,41 @@ $('nanoSyncPending').onclick=syncQueue;
 $('nanoLogin').onclick=login;$('nanoPassword').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
 $('nanoExit').onclick=()=>{if(!confirm('Sair da conta neste aparelho? Rascunhos offline permanecerão armazenados localmente.'))return;session=null;profile=null;localStorage.removeItem(sessionKey);S.apply({cliente:'',responsavel:'',whatsapp:'',endereco:'',cidade:'',vendedor:'',numero:'',preco:'85',adicionais:'0',desconto:'0',trechos:[{},{},{}]});hideApp()};
 async function showOrderPhotos(orderId,sellerId){const box=$('nanoPhotosResult')||document.createElement('div');box.id='nanoPhotosResult';box.textContent='Carregando fotos...';$('nanoHistory').append(box);try{const sellers=await request('/rest/v1/nano_vendedores?select=auth_user_id&id=eq.'+encodeURIComponent(sellerId));const owner=sellers?.[0]?.auth_user_id;if(!owner)throw Error('Não foi possível identificar o vendedor.');await refreshIfNeeded();const prefix=`${owner}/${orderId}/`;const r=await fetch(URLBASE+'/storage/v1/object/list/nano4you-fotos',{method:'POST',headers:tokenHeaders(),body:JSON.stringify({prefix,limit:20,offset:0})});if(!r.ok)throw Error((await r.text()).slice(0,180));const files=(await r.json()).filter(f=>/\.(jpg|jpeg|png|webp)$/i.test(f.name));box.replaceChildren();const heading=document.createElement('p');heading.textContent=`Fotos do orçamento: ${files.length}`;box.append(heading);for(const f of files){const path=prefix+f.name;await refreshIfNeeded();const resp=await fetch(URLBASE+'/storage/v1/object/authenticated/nano4you-fotos/'+path.split('/').map(encodeURIComponent).join('/'),{headers:{apikey:KEY,Authorization:'Bearer '+session.access_token}});if(!resp.ok)throw Error('Não foi possível abrir uma das fotos.');const blob=await resp.blob();const url=URL.createObjectURL(blob);const img=document.createElement('img');img.src=url;img.alt='Fotografia da fachada';img.style.cssText='max-width:180px;max-height:140px;object-fit:cover;margin:5px;border-radius:8px;cursor:pointer';img.onclick=()=>window.open(url,'_blank');box.append(img);setTimeout(()=>URL.revokeObjectURL(url),5*60*1000)}if(!files.length)box.append(document.createTextNode('Nenhuma foto enviada para este orçamento.'))}catch(e){box.textContent='Erro ao visualizar fotos: '+e.message}}
-$('nanoHistoryBtn').onclick=async()=>{const pane=$('nanoHistory');pane.style.display='block';pane.scrollIntoView({behavior:'smooth'});$('nanoHistoryList').textContent='Consultando...';$('nanoPhotosResult')?.remove();try{const rows=await request('/rest/v1/nano_orcamentos?select=id,area_m2,valor_total,status,created_at,cliente_id,vendedor_id&order=created_at.desc&limit=50');const el=$('nanoHistoryList');el.replaceChildren();rows.forEach(r=>{const x=document.createElement('li');x.textContent=`${new Date(r.created_at).toLocaleDateString('pt-BR')} · ${r.area_m2} m² · ${Number(r.valor_total).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})} · ${r.status} `;const b=document.createElement('button');b.type='button';b.textContent='Ver fotos';b.className='secondary';b.onclick=()=>showOrderPhotos(r.id,r.vendedor_id);x.append(b);el.append(x)});if(!rows.length)el.textContent='Nenhum orçamento sincronizado.';const p=document.createElement('p');p.textContent=`Na fila local: ${queue().length} registro(s).`;el.append(p)}catch(e){$('nanoHistoryList').textContent='Não foi possível carregar o histórico: '+e.message}};
+// Histórico enriquecido com nomes relacionados. Consultas respeitam as políticas RLS.
+async function labelsFor(table,ids,columns){
+ const unique=[...new Set(ids.filter(Boolean))];
+ if(!unique.length)return new Map();
+ const q=encodeURIComponent('('+unique.join(',')+')');
+ const rows=await request(`/rest/v1/${table}?select=${columns}&id=in.${q}`);
+ return new Map((rows||[]).map(r=>[r.id,r]));
+}
+$('nanoHistoryBtn').onclick=async()=>{
+ const pane=$('nanoHistory');pane.style.display='block';pane.scrollIntoView({behavior:'smooth'});
+ $('nanoHistoryList').textContent='Consultando...';$('nanoPhotosResult')?.remove();
+ try{
+  const rows=await request('/rest/v1/nano_orcamentos?select=id,area_m2,valor_total,status,created_at,cliente_id,vendedor_id&order=created_at.desc&limit=50');
+  const el=$('nanoHistoryList');el.replaceChildren();
+  // Uma falha ao consultar nomes não deve impedir a consulta de orçamentos.
+  let clients=new Map(),sellers=new Map(),lookupError=false;
+  try{clients=await labelsFor('nano_clientes',rows.map(r=>r.cliente_id),'id,nome_cliente,cidade')}catch(e){lookupError=true;console.warn('Nomes dos clientes indisponíveis:',e.message)}
+  try{if(profile?.perfil==='administrador')sellers=await labelsFor('nano_vendedores',rows.map(r=>r.vendedor_id),'id,nome')}catch(e){lookupError=true;console.warn('Nomes dos vendedores indisponíveis:',e.message)}
+  rows.forEach(r=>{
+   const li=document.createElement('li');li.style.cssText='padding:12px 0;border-bottom:1px solid #dce9f0;list-style:none';
+   const heading=document.createElement('strong');heading.style.cssText='display:block;color:#075886;font-size:15px;margin-bottom:4px';
+   heading.textContent=clients.get(r.cliente_id)?.nome_cliente||'Cliente não identificado';li.append(heading);
+   const meta=document.createElement('div');meta.style.cssText='margin-bottom:8px;color:#425b6d;font-size:13px';
+   const date=new Date(r.created_at).toLocaleDateString('pt-BR');const value=Number(r.valor_total).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+   meta.textContent=`${date} · ${r.area_m2} m² · ${value} · ${r.status}`;li.append(meta);
+   const detail=[];if(clients.get(r.cliente_id)?.cidade)detail.push(clients.get(r.cliente_id).cidade);
+   if(profile?.perfil==='administrador')detail.push('Vendedor: '+(sellers.get(r.vendedor_id)?.nome||'Não identificado'));
+   if(detail.length){const line=document.createElement('div');line.style.cssText='color:#627786;font-size:12px;margin-bottom:8px';line.textContent=detail.join(' · ');li.append(line)}
+   const b=document.createElement('button');b.type='button';b.textContent='Ver fotos';b.className='secondary';b.onclick=()=>showOrderPhotos(r.id,r.vendedor_id);li.append(b);el.append(li);
+  });
+  if(!rows.length)el.textContent='Nenhum orçamento sincronizado.';
+  if(lookupError){const warning=document.createElement('p');warning.className='muted';warning.textContent='Alguns nomes não puderam ser carregados. Confira a conexão e as permissões de leitura.';el.append(warning)}
+  const p=document.createElement('p');p.textContent=`Na fila local: ${queue().length} registro(s).`;el.append(p);
+ }catch(e){$('nanoHistoryList').textContent='Não foi possível carregar o histórico: '+e.message}
+};
 $('nanoCloseHistory').onclick=()=>$('nanoHistory').style.display='none';
 window.addEventListener('online',()=>{if(session)msg('Conectado. Use Salvar / sincronizar para enviar fichas pendentes.');});window.addEventListener('offline',()=>{if(session)msg('Sem conexão: seus rascunhos continuam locais.');});
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
