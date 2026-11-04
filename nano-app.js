@@ -74,13 +74,14 @@ $('nanoHistoryBtn').onclick=async()=>{$('nanoAdmin').style.display='none';
  const pane=$('nanoHistory');pane.style.display='block';pane.scrollIntoView({behavior:'smooth'});
  $('nanoHistoryList').textContent='Consultando...';$('nanoPhotosResult')?.remove();
  try{
-  const rows=await request('/rest/v1/nano_orcamentos?select=id,area_m2,valor_total,status,created_at,cliente_id,vendedor_id&order=created_at.desc&limit=50');
+  const rows=await request('/rest/v1/nano_orcamentos?select=id,area_m2,valor_m2,valor_adicional,desconto,valor_total,status,created_at,cliente_id,vendedor_id&order=created_at.desc&limit=50');
   const el=$('nanoHistoryList');el.replaceChildren();
   // Uma falha ao consultar nomes não deve impedir a consulta de orçamentos.
   let clients=new Map(),sellers=new Map(),lookupError=false;
   try{clients=await labelsFor('nano_clientes',rows.map(r=>r.cliente_id),'id,nome_cliente,cidade')}catch(e){lookupError=true;console.warn('Nomes dos clientes indisponíveis:',e.message)}
   try{if(profile?.perfil==='administrador')sellers=await labelsFor('nano_vendedores',rows.map(r=>r.vendedor_id),'id,nome')}catch(e){lookupError=true;console.warn('Nomes dos vendedores indisponíveis:',e.message)}
   const historyStages=await nanoLoadStages(rows.map(o=>o.id));
+   const historyDiscounts=await nanoLoadDiscounts(rows.map(o=>o.id));
   rows.forEach(r=>{
    const li=document.createElement('li');li.style.cssText='padding:12px 0;border-bottom:1px solid #dce9f0;list-style:none';
    const heading=document.createElement('strong');heading.style.cssText='display:block;color:#075886;font-size:15px;margin-bottom:4px';
@@ -92,7 +93,11 @@ $('nanoHistoryBtn').onclick=async()=>{$('nanoAdmin').style.display='none';
    if(profile?.perfil==='administrador')detail.push('Vendedor: '+(sellers.get(r.vendedor_id)?.nome||'Não identificado'));
    if(detail.length){const line=document.createElement('div');line.style.cssText='color:#627786;font-size:12px;margin-bottom:8px';line.textContent=detail.join(' · ');li.append(line)}
    const b=document.createElement('button');b.type='button';b.textContent='Ver fotos';b.className='secondary';b.onclick=()=>showOrderPhotos(r.id,r.vendedor_id);li.append(b);
-    const stageWrap=admNode('div');stageWrap.style.cssText='display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0';const stageSelect=document.createElement('select');stageSelect.style.cssText='width:auto;min-width:170px';nanoStageOptions.forEach(([v,l])=>stageSelect.add(new Option(l,v)));stageSelect.value=historyStages.get(r.id)?.situacao||(r.status==='aprovado'?'aprovado':'em_vistoria');const stageBtn=admNode('button','Atualizar situação','secondary');stageBtn.type='button';stageBtn.onclick=async()=>{let reason=null;if(stageSelect.value==='perdido'){reason=prompt('Informe obrigatoriamente o motivo da perda:');if(reason===null)return;if(!reason.trim()){alert('O motivo é obrigatório.');return}}else{reason=prompt('Observação da atualização (opcional):','');if(reason===null)return}stageBtn.disabled=true;try{await request('/rest/v1/rpc/nano_registrar_etapa','POST',{p_orcamento_id:r.id,p_situacao:stageSelect.value,p_motivo:reason?.trim()||null});$('nanoHistoryBtn').click();msg('Situação comercial atualizada.')}catch(e){alert('Não foi possível atualizar: '+e.message)}finally{stageBtn.disabled=false}};stageWrap.append(stageSelect,stageBtn);li.append(stageWrap);el.append(li);
+    const stageWrap=admNode('div');stageWrap.style.cssText='display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0';const stageSelect=document.createElement('select');stageSelect.style.cssText='width:auto;min-width:170px';nanoStageOptions.forEach(([v,l])=>stageSelect.add(new Option(l,v)));stageSelect.value=historyStages.get(r.id)?.situacao||(r.status==='aprovado'?'aprovado':'em_vistoria');const stageBtn=admNode('button','Atualizar situação','secondary');stageBtn.type='button';stageBtn.onclick=async()=>{let reason=null;if(stageSelect.value==='perdido'){reason=prompt('Informe obrigatoriamente o motivo da perda:');if(reason===null)return;if(!reason.trim()){alert('O motivo é obrigatório.');return}}else{reason=prompt('Observação da atualização (opcional):','');if(reason===null)return}stageBtn.disabled=true;try{await request('/rest/v1/rpc/nano_registrar_etapa','POST',{p_orcamento_id:r.id,p_situacao:stageSelect.value,p_motivo:reason?.trim()||null});$('nanoHistoryBtn').click();msg('Situação comercial atualizada.')}catch(e){alert('Não foi possível atualizar: '+e.message)}finally{stageBtn.disabled=false}};stageWrap.append(stageSelect,stageBtn);li.append(stageWrap);
+    const discounts=historyDiscounts.filter(d=>d.orcamento_id===r.id);
+    nanoDiscountInfo(li,discounts);
+    if(!['perdido','cancelado','aprovado'].includes(stageSelect.value))nanoSellerDiscountControl(li,r,discounts);
+    el.append(li);
   });
   if(!rows.length)el.textContent='Nenhum orçamento sincronizado.';
   if(lookupError){const warning=document.createElement('p');warning.className='muted';warning.textContent='Alguns nomes não puderam ser carregados. Confira a conexão e as permissões de leitura.';el.append(warning)}
@@ -101,7 +106,106 @@ $('nanoHistoryBtn').onclick=async()=>{$('nanoAdmin').style.display='none';
 };
 
 // PAINEL ADMINISTRATIVO: leitura autorizada, sem alteracoes financeiras neste modulo.
-const admState={orders:[],clients:new Map(),sellers:new Map(),stages:new Map()};
+const admState={orders:[],clients:new Map(),sellers:new Map(),stages:new Map(),discounts:[]};
+const nanoDiscountLabel={pendente:'Pendente de aprovação',aprovado:'Desconto aprovado',recusado:'Desconto recusado'};
+const nanoDiscountByOrder=(orderId)=>admState.discounts.filter(x=>x.orcamento_id===orderId);
+const nanoDiscountAmount=n=>Number(n||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+async function nanoLoadDiscounts(ids){
+  if(!ids.length)return [];
+  const all=[];
+  for(let i=0;i<ids.length;i+=80){
+    const q=encodeURIComponent('('+ids.slice(i,i+80).join(',')+')');
+    const rows=await request('/rest/v1/nano_solicitacoes_desconto?select=id,orcamento_id,solicitado_por,desconto_atual,desconto_solicitado,justificativa,situacao,criado_em,decidido_por,decidido_em,observacao_decisao&orcamento_id=in.'+q+'&order=criado_em.desc,id.desc&limit=1000');
+    all.push(...(rows||[]));
+  }
+  return all;
+}
+function nanoDiscountInfo(host,requests){
+  if(!requests.length)return;
+  const latest=requests[0], p=admNode('p');
+  p.append(admNode('strong','Desconto: '),document.createTextNode(
+    `${nanoDiscountLabel[latest.situacao]||latest.situacao} · solicitado: ${nanoDiscountAmount(latest.desconto_solicitado)} · ${new Date(latest.criado_em).toLocaleDateString('pt-BR')}`
+  ));host.append(p);
+  if(latest.situacao==='recusado'&&latest.observacao_decisao)host.append(admNode('p','Justificativa da recusa: '+latest.observacao_decisao));
+}
+function nanoSellerDiscountControl(host,order,requests){
+  if(profile?.perfil!=='vendedor')return;
+  const pending=requests.some(r=>r.situacao==='pendente');
+  const form=admNode('div');form.style.cssText='margin:9px 0 13px;padding:12px;border-radius:9px;background:#f1f6fa';
+  form.append(admNode('strong','Solicitar desconto ao administrador'));
+  if(pending){form.append(admNode('p','Já existe uma solicitação pendente para este orçamento. Aguarde a decisão.'));host.append(form);return}
+  const amount=document.createElement('input');amount.type='number';amount.min='0.01';amount.step='0.01';amount.placeholder='Desconto total solicitado em R$';amount.setAttribute('aria-label','Valor total do desconto solicitado');amount.style.cssText='max-width:280px;margin:8px 0';
+  const note=document.createElement('textarea');note.placeholder='Justificativa comercial (mínimo de 5 caracteres)';note.setAttribute('aria-label','Justificativa do desconto');note.style.cssText='min-height:65px;display:block;margin:6px 0 9px';
+  const button=admNode('button','Enviar solicitação','secondary');button.type='button';
+  const gross=Number(order.area_m2||0)*Number(order.valor_m2||0)+Number(order.valor_adicional||0);
+  const hint=admNode('p',`Desconto atual: ${nanoDiscountAmount(order.desconto)} · Valor bruto: ${nanoDiscountAmount(gross)}. Informe o desconto total desejado, não a diferença.`,'muted');
+  button.onclick=async()=>{
+    const value=Number(amount.value);
+    if(!Number.isFinite(value)||!amount.value||value<=Number(order.desconto||0)||value>=gross){alert('Informe um desconto total maior que o atual e menor que o valor bruto.');return}
+    if(note.value.trim().length<5){alert('Informe uma justificativa de pelo menos cinco caracteres.');note.focus();return}
+    if(!confirm(`Solicitar desconto total de ${nanoDiscountAmount(value)} para este orçamento? O valor só mudará após aprovação.`))return;
+    button.disabled=true;
+    try{await request('/rest/v1/rpc/nano_solicitar_desconto','POST',{p_orcamento_id:order.id,p_desconto:value,p_justificativa:note.value.trim()});msg('Solicitação enviada para análise do administrador.');$('nanoHistoryBtn').click()}
+    catch(e){alert('Não foi possível solicitar desconto: '+e.message);button.disabled=false}
+  };
+  form.append(hint,amount,note,button);host.append(form);
+}
+async function nanoAdminDecide(requestRecord,approve){
+  if(profile?.perfil!=='administrador')return;
+  const decision=approve?'aprovar':'recusar';
+  const observation=prompt(`Observação para ${decision} o desconto de ${nanoDiscountAmount(requestRecord.desconto_solicitado)} (opcional):`,'');
+  if(observation===null)return;
+  if(!confirm(`Confirmar decisão de ${decision} este desconto?`))return;
+  try{
+    await request('/rest/v1/rpc/nano_decidir_desconto','POST',{p_solicitacao_id:requestRecord.id,p_aprovar:approve,p_observacao:observation.trim()||null});
+    await admReload();
+    const current=admState.orders.find(o=>o.id===requestRecord.orcamento_id);
+    if(current)admShowDetails(current);
+    msg(approve?'Desconto aprovado. Novo valor aplicado ao orçamento.':'Desconto recusado. Valor do orçamento preservado.');
+  }catch(e){alert('Decisão não registrada: '+e.message)}
+}
+function nanoAdminDiscountDetail(host,order){
+  const requests=nanoDiscountByOrder(order.id);
+  if(!requests.length)return;
+  const pane=admNode('div');pane.style.cssText='padding:12px;margin:14px 0;background:#eaf5fa;border-radius:10px';
+  pane.append(admNode('h3','Solicitações de desconto'));
+  for(const r of requests){
+    const detail=admNode('div');detail.style.cssText='border-bottom:1px solid #c7dbe9;padding:10px 0';
+    detail.append(admNode('p',`${nanoDiscountLabel[r.situacao]} · Solicitado em ${new Date(r.criado_em).toLocaleString('pt-BR')}`));
+    detail.append(admNode('p',`Desconto anterior: ${nanoDiscountAmount(r.desconto_atual)} · Solicitado: ${nanoDiscountAmount(r.desconto_solicitado)}`));
+    detail.append(admNode('p','Justificativa: '+r.justificativa));
+    if(r.decidido_em)detail.append(admNode('p','Decidido em: '+new Date(r.decidido_em).toLocaleString('pt-BR')));
+    if(r.observacao_decisao)detail.append(admNode('p','Observação da decisão: '+r.observacao_decisao));
+    if(r.situacao==='pendente'){
+      const actions=admNode('div');actions.style.cssText='display:flex;flex-wrap:wrap;gap:8px';
+      const yes=admNode('button','Aprovar desconto');yes.type='button';yes.onclick=()=>nanoAdminDecide(r,true);
+      const no=admNode('button','Recusar desconto','secondary');no.type='button';no.onclick=()=>nanoAdminDecide(r,false);
+      actions.append(yes,no);detail.append(actions);
+    }
+    pane.append(detail);
+  }
+  host.append(pane);
+}
+function nanoRenderPendingRequests(){
+  const host=$('admDiscountRequests');host.replaceChildren();
+  const orderMap=new Map(admState.orders.map(o=>[o.id,o]));
+  const pending=admState.discounts.filter(r=>r.situacao==='pendente');
+  $('admDiscountCount').textContent=String(pending.length);
+  if(!pending.length){host.append(admNode('p','Nenhuma solicitação pendente.','muted'));return}
+  for(const r of pending){
+    const order=orderMap.get(r.orcamento_id),client=admState.clients.get(order?.cliente_id)||{},seller=admState.sellers.get(order?.vendedor_id)||{};
+    const card=admNode('div',undefined,'adm-item');
+    card.append(admNode('strong',client.nome_cliente||'Cliente não identificado'));
+    card.append(admNode('p',`Vendedor: ${seller.nome||'Não identificado'} · Desconto solicitado: ${nanoDiscountAmount(r.desconto_solicitado)}`));
+    card.append(admNode('p',`Justificativa: ${r.justificativa}`));
+    const actions=admNode('div',undefined,'adm-actions');
+    const see=admNode('button','Ver orçamento','secondary');see.type='button';see.onclick=()=>{if(order)admShowDetails(order)};
+    const yes=admNode('button','Aprovar');yes.type='button';yes.onclick=()=>nanoAdminDecide(r,true);
+    const no=admNode('button','Recusar','secondary');no.type='button';no.onclick=()=>nanoAdminDecide(r,false);
+    actions.append(see,yes,no);card.append(actions);host.append(card);
+  }
+}
+
 const nanoStageNames={em_vistoria:'Em vistoria',orcamento_enviado:'Orçamento enviado',em_negociacao:'Em negociação',aprovado:'Aprovado pelo cliente',perdido:'Negócio perdido',cancelado:'Cancelado'};
 const nanoStageOptions=Object.entries(nanoStageNames);
 function nanoCurrentStage(o){return admState.stages.get(o.id)?.situacao||(o.status==='aprovado'?'aprovado':'em_vistoria')}
@@ -118,7 +222,8 @@ for(const [label,value] of fields){if(value===undefined||value===null||value==='
 if(Array.isArray(ficha.trechos)&&ficha.trechos.length){box.append(admNode('h3','Trechos da fachada'));ficha.trechos.forEach((t,i)=>box.append(admNode('p',`${i+1}. ${t.local||'Trecho'} — ${t.largura||'?'} m × ${t.altura||'?'} m`)))}
 const stage=admState.stages.get(o.id);if(stage){const s=admNode('p');s.append(admNode('strong','Última atualização comercial: '),document.createTextNode(new Date(stage.criado_em).toLocaleString('pt-BR')));box.append(s);if(stage.motivo)box.append(admNode('p','Motivo / observação: '+stage.motivo))}
 const editor=admNode('div',undefined,'adm-status-form');const lbl=admNode('label','Atualizar situação comercial');const sel=document.createElement('select');sel.setAttribute('aria-label','Nova situação comercial');for(const [value,title] of nanoStageOptions)sel.add(new Option(title,value));sel.value=nanoCurrentStage(o);const reason=document.createElement('textarea');reason.placeholder='Observação opcional; obrigatória para Negócio perdido';reason.setAttribute('aria-label','Motivo ou observação da mudança');reason.style.display=sel.value==='perdido'?'block':'none';sel.onchange=()=>{reason.style.display=sel.value==='perdido'?'block':'none'};const submit=admNode('button','Salvar situação');submit.type='button';submit.onclick=async()=>{if(sel.value==='perdido'&&!reason.value.trim()){alert('Informe o motivo da perda da negociação.');reason.focus();return}if(!confirm('Registrar a situação comercial deste orçamento?'))return;submit.disabled=true;try{await request('/rest/v1/rpc/nano_registrar_etapa','POST',{p_orcamento_id:o.id,p_situacao:sel.value,p_motivo:reason.value.trim()||null});await admReload();const updated=admState.orders.find(x=>x.id===o.id);if(updated)admShowDetails(updated);msg('Situação comercial registrada com sucesso.')}catch(e){alert('Não foi possível atualizar a situação: '+e.message)}finally{submit.disabled=false}};editor.append(lbl,sel,reason,submit);box.append(editor);
-const pb=admNode('button','Ver fotos','secondary');pb.type='button';pb.onclick=()=>showOrderPhotos(o.id,o.vendedor_id,box);box.append(pb);box.scrollIntoView({behavior:'smooth',block:'start'});
+nanoAdminDiscountDetail(box,o);
+ const pb=admNode('button','Ver fotos','secondary');pb.type='button';pb.onclick=()=>showOrderPhotos(o.id,o.vendedor_id,box);box.append(pb);box.scrollIntoView({behavior:'smooth',block:'start'});
 }
 function admRender(){
  const orders=admFiltered(),el=$('admOrders');el.replaceChildren();
@@ -154,7 +259,7 @@ function admRender(){
  if(!orders.length){el.append(admNode('p','Nenhum orçamento para os filtros selecionados.'));return}
  orders.forEach(o=>{const c=admState.clients.get(o.cliente_id)||{},s=admState.sellers.get(o.vendedor_id)||{},card=admNode('article',undefined,'adm-item');card.append(admNode('strong',c.nome_cliente||'Cliente não identificado'));card.append(admNode('p',`${new Date(o.created_at).toLocaleDateString('pt-BR')} · ${c.cidade||'Cidade não informada'} · ${s.nome||'Vendedor não identificado'}`));card.append(admNode('p',`${o.area_m2} m² · ${admMoney(o.valor_total)} · ${nanoStageNames[nanoCurrentStage(o)]||admStatusLabel(o.status)}`));const actions=admNode('div',undefined,'adm-actions'),detail=admNode('button','Ver ficha completa','secondary'),photos=admNode('button','Ver fotos','secondary');detail.type='button';photos.type='button';detail.onclick=()=>admShowDetails(o);photos.onclick=()=>{admShowDetails(o);showOrderPhotos(o.id,o.vendedor_id,$('nanoAdminDetail'))};actions.append(detail,photos);card.append(actions);el.append(card)})
 }
-async function admReload(){if(profile?.perfil!=='administrador'){return}const p=$('admMessage');p.textContent='Carregando dados da equipe...';try{const [orders,clients,sellers]=await Promise.all([admFetchAll('nano_orcamentos','id,cliente_id,vendedor_id,area_m2,valor_m2,valor_adicional,desconto,valor_total,status,observacoes,created_at'),admFetchAll('nano_clientes','id,nome_cliente,cidade,endereco,responsavel,telefone,observacoes,created_at'),admFetchAll('nano_vendedores','id,nome,created_at')]);admState.orders=orders;admState.stages=await nanoLoadStages(orders.map(o=>o.id));admState.clients=new Map(clients.map(o=>[o.id,o]));admState.sellers=new Map(sellers.map(o=>[o.id,o]));admSetOptions('admSeller',sellers.map(o=>[o.id,o.nome]).sort((a,b)=>a[1].localeCompare(b[1])),'Todos');admSetOptions('admCity',[...new Set(clients.map(c=>c.cidade).filter(Boolean))].sort().map(c=>[c,c]),'Todas');admSetOptions('admStatus',nanoStageOptions,'Todas');p.textContent=`${orders.length} orçamento(s) sincronizado(s). Indicadores baseados nos orçamentos com os filtros atuais.`;admRender()}catch(e){p.textContent='Erro ao consultar painel: '+e.message}}
+async function admReload(){if(profile?.perfil!=='administrador'){return}const p=$('admMessage');p.textContent='Carregando dados da equipe...';try{const [orders,clients,sellers]=await Promise.all([admFetchAll('nano_orcamentos','id,cliente_id,vendedor_id,area_m2,valor_m2,valor_adicional,desconto,valor_total,status,observacoes,created_at'),admFetchAll('nano_clientes','id,nome_cliente,cidade,endereco,responsavel,telefone,observacoes,created_at'),admFetchAll('nano_vendedores','id,nome,created_at')]);admState.orders=orders;admState.stages=await nanoLoadStages(orders.map(o=>o.id));admState.discounts=await nanoLoadDiscounts(orders.map(o=>o.id));admState.clients=new Map(clients.map(o=>[o.id,o]));admState.sellers=new Map(sellers.map(o=>[o.id,o]));admSetOptions('admSeller',sellers.map(o=>[o.id,o.nome]).sort((a,b)=>a[1].localeCompare(b[1])),'Todos');admSetOptions('admCity',[...new Set(clients.map(c=>c.cidade).filter(Boolean))].sort().map(c=>[c,c]),'Todas');admSetOptions('admStatus',nanoStageOptions,'Todas');p.textContent=`${orders.length} orçamento(s) sincronizado(s). Indicadores baseados nos orçamentos com os filtros atuais.`;admRender();nanoRenderPendingRequests()}catch(e){p.textContent='Erro ao consultar painel: '+e.message}}
 $('nanoAdminBtn').onclick=()=>{if(profile?.perfil!=='administrador'){return}const pane=$('nanoAdmin');const opening=pane.style.display!=='block';pane.style.display=opening?'block':'none';$('nanoHistory').style.display='none';if(opening){pane.scrollIntoView({behavior:'smooth'});admReload()}};
 $('admClose').onclick=()=>$('nanoAdmin').style.display='none';$('admReload').onclick=admReload;
 $('admReset').onclick=()=>{for(const id of ['admSeller','admCity','admStatus','admSearch','admStart','admEnd'])$(id).value='';admRender()};
