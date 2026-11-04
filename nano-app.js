@@ -21,12 +21,12 @@ async function refreshIfNeeded(){if(!session)throw Error('Faça login.');if(Date
  if(!r.ok){session=null;localStorage.removeItem(sessionKey);throw Error('Sessão expirada; faça login novamente.')}const j=await r.json();session={access_token:j.access_token,refresh_token:j.refresh_token,user:j.user,expires_at:Date.now()+j.expires_in*1000};persistSession();
 }
 async function loadProfile(){const rows=await request('/rest/v1/nano_vendedores?select=id,nome,perfil,ativo,auth_user_id&auth_user_id=eq.'+encodeURIComponent(session.user.id));const p=rows?.[0];if(!p||!p.ativo)throw Error('Conta sem cadastro ativo na Nano4You. Solicite autorização ao administrador.');profile=p;}
-function applyRole(){const isAdmin=profile?.perfil==='administrador';for(const id of ['preco','desconto','adicionais']){$(id).readOnly=!isAdmin;$(id).title=isAdmin?'':'Alterações de preços são exclusivas do administrador';}if(!isAdmin){$('preco').value='85';$('desconto').value='0';$('adicionais').value='0';} $('vendedor').value=profile.nome;$('vendedor').readOnly=true;S.recalc();$('nanoAdminBtn').style.display=isAdmin?'inline-block':'none';$('nanoWho').textContent=`${profile.nome} · ${isAdmin?'Administrador':'Vendedor'}`;}
+function applyRole(){const isAdmin=profile?.perfil==='administrador';for(const id of ['preco','desconto','adicionais']){$(id).readOnly=!isAdmin;$(id).title=isAdmin?'':'Alterações de preços são exclusivas do administrador';}if(!isAdmin){$('preco').value='85';$('desconto').value='0';$('adicionais').value='0';} $('vendedor').value=profile.nome;$('vendedor').readOnly=true;S.recalc();$('nanoAdminBtn').style.display=isAdmin?'inline-block':'none';$('nanoDiscountAlert').style.display='none';if(isAdmin&&navigator.onLine)nanoRefreshDiscountAlert().catch(()=>{});$('nanoWho').textContent=`${profile.nome} · ${isAdmin?'Administrador':'Vendedor'}`;}
 function draftsGet(){try{return JSON.parse(localStorage.getItem(draftKey())||'null')}catch{return null}}
 function draftsSave(){if(!session)return;try{localStorage.setItem(draftKey(),JSON.stringify(S.collect()))}catch{msg('Armazenamento cheio. Exporte o JSON!')}}
 let saveTimeout;document.querySelector('#f').addEventListener('input',()=>{clearTimeout(saveTimeout);saveTimeout=setTimeout(draftsSave,250)},true);
 function showApp(){ $('nanoAccess').style.display='none';$('nanoBar').style.display='flex';const d=draftsGet();if(d)S.apply(d);applyRole();msg(navigator.onLine?'Conectado · rascunho local disponível':'Offline · preenchimento local');}
-function hideApp(){ $('nanoAccess').style.display='flex';$('nanoBar').style.display='none';$('nanoHistory').style.display='none';$('nanoAdmin').style.display='none';$('nanoAdminDetail').style.display='none';}
+function hideApp(){ $('nanoAccess').style.display='flex';$('nanoBar').style.display='none';$('nanoHistory').style.display='none';$('nanoAdmin').style.display='none';$('nanoAdminDetail').style.display='none';$('nanoDiscountAlert').style.display='none';}
 async function login(){const text=$('nanoLoginMsg');text.textContent='';if(!ready){text.textContent='Conexão não configurada: preencha o arquivo config.js antes de publicar.';return}const email=$('nanoEmail').value.trim(),password=$('nanoPassword').value;if(!email||!password){text.textContent='Informe e-mail e senha.';return}try{const r=await fetch(URLBASE+'/auth/v1/token?grant_type=password',{method:'POST',headers:{'apikey':KEY,'Content-Type':'application/json'},body:JSON.stringify({email,password})});const j=await r.json();if(!r.ok)throw Error(j.error_description||j.msg||j.message||'Login recusado');session={user:j.user,access_token:j.access_token,refresh_token:j.refresh_token,expires_at:Date.now()+j.expires_in*1000};await loadProfile();persistSession();$('nanoPassword').value='';showApp()}catch(e){session=null;text.textContent=e.message}}
 async function boot(){try{if(!ready)throw Error('Configure config.js com URL e chave publicável do Supabase.');session=JSON.parse(localStorage.getItem(sessionKey)||'null');if(!session)return;await loadProfile();showApp()}catch(e){if(session&&!navigator.onLine){const p=JSON.parse(localStorage.getItem('nano4you_cached_profile_'+session.user.id)||'null');if(p){profile=p;showApp();msg('Offline: somente rascunho; sincronização exige internet.');return}}hideApp();$('nanoLoginMsg').textContent=e.message;session=null;localStorage.removeItem(sessionKey)}}
 // Cache profile only after successful authentication; local drafts never uploaded without active session.
@@ -108,6 +108,25 @@ $('nanoHistoryBtn').onclick=async()=>{$('nanoAdmin').style.display='none';
 // PAINEL ADMINISTRATIVO: leitura autorizada, sem alteracoes financeiras neste modulo.
 const admState={orders:[],clients:new Map(),sellers:new Map(),stages:new Map(),discounts:[]};
 const nanoDiscountLabel={pendente:'Pendente de aprovação',aprovado:'Desconto aprovado',recusado:'Desconto recusado'};
+const nanoDiscountStyles={pendente:'nano-discount-pending',aprovado:'nano-discount-approved',recusado:'nano-discount-rejected'};
+const nanoDiscountIcons={pendente:'⏳',aprovado:'✓',recusado:'✕'};
+function nanoDiscountBadge(status){
+ const badge=admNode('span',`${nanoDiscountIcons[status]||'•'} ${nanoDiscountLabel[status]||status}`,'nano-discount-badge '+(nanoDiscountStyles[status]||''));
+ badge.setAttribute('role','status');return badge;
+}
+function nanoSetDiscountAlert(count){
+ const button=$('nanoDiscountAlert');if(!button)return;
+ const show=profile?.perfil==='administrador'&&count>0;
+ button.style.display=show?'inline-block':'none';
+ button.textContent=`🔔 Descontos pendentes (${count})`;
+ button.setAttribute('aria-label',`${count} solicitação${count===1?'':'ões'} de desconto pendente${count===1?'':'s'}. Abrir no Painel Administrativo.`);
+}
+async function nanoRefreshDiscountAlert(){
+ if(profile?.perfil!=='administrador'||!session||!navigator.onLine)return;
+ const rows=await request('/rest/v1/nano_solicitacoes_desconto?select=id&situacao=eq.pendente&limit=1000');
+ if(profile?.perfil==='administrador')nanoSetDiscountAlert((rows||[]).length);
+}
+
 const nanoDiscountByOrder=(orderId)=>admState.discounts.filter(x=>x.orcamento_id===orderId);
 const nanoDiscountAmount=n=>Number(n||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 async function nanoLoadDiscounts(ids){
@@ -122,11 +141,14 @@ async function nanoLoadDiscounts(ids){
 }
 function nanoDiscountInfo(host,requests){
   if(!requests.length)return;
-  const latest=requests[0], p=admNode('p');
-  p.append(admNode('strong','Desconto: '),document.createTextNode(
-    `${nanoDiscountLabel[latest.situacao]||latest.situacao} · solicitado: ${nanoDiscountAmount(latest.desconto_solicitado)} · ${new Date(latest.criado_em).toLocaleDateString('pt-BR')}`
-  ));host.append(p);
-  if(latest.situacao==='recusado'&&latest.observacao_decisao)host.append(admNode('p','Justificativa da recusa: '+latest.observacao_decisao));
+  const latest=requests[0], card=admNode('div',undefined,nanoDiscountStyles[latest.situacao]||'');
+  card.append(nanoDiscountBadge(latest.situacao));
+  card.append(admNode('p',`Desconto solicitado: ${nanoDiscountAmount(latest.desconto_solicitado)} · ${new Date(latest.criado_em).toLocaleDateString('pt-BR')}`));
+  if(latest.situacao==='pendente')card.append(admNode('p','Aguardando análise do administrador. O valor permanece inalterado.'));
+  if(latest.situacao==='aprovado')card.append(admNode('p','Desconto autorizado e aplicado ao orçamento.'));
+  if(latest.situacao==='recusado')card.append(admNode('p','Desconto recusado. O valor do orçamento foi preservado.'));
+  if(latest.observacao_decisao)card.append(admNode('p','Observação da decisão: '+latest.observacao_decisao));
+  host.append(card);
 }
 function nanoSellerDiscountControl(host,order,requests){
   if(profile?.perfil!=='vendedor')return;
@@ -170,8 +192,9 @@ function nanoAdminDiscountDetail(host,order){
   const pane=admNode('div');pane.style.cssText='padding:12px;margin:14px 0;background:#eaf5fa;border-radius:10px';
   pane.append(admNode('h3','Solicitações de desconto'));
   for(const r of requests){
-    const detail=admNode('div');detail.style.cssText='border-bottom:1px solid #c7dbe9;padding:10px 0';
-    detail.append(admNode('p',`${nanoDiscountLabel[r.situacao]} · Solicitado em ${new Date(r.criado_em).toLocaleString('pt-BR')}`));
+    const detail=admNode('div',undefined,nanoDiscountStyles[r.situacao]||'');
+    detail.append(nanoDiscountBadge(r.situacao));
+    detail.append(admNode('p',`Solicitado em ${new Date(r.criado_em).toLocaleString('pt-BR')}`));
     detail.append(admNode('p',`Desconto anterior: ${nanoDiscountAmount(r.desconto_atual)} · Solicitado: ${nanoDiscountAmount(r.desconto_solicitado)}`));
     detail.append(admNode('p','Justificativa: '+r.justificativa));
     if(r.decidido_em)detail.append(admNode('p','Decidido em: '+new Date(r.decidido_em).toLocaleString('pt-BR')));
@@ -190,11 +213,12 @@ function nanoRenderPendingRequests(){
   const host=$('admDiscountRequests');host.replaceChildren();
   const orderMap=new Map(admState.orders.map(o=>[o.id,o]));
   const pending=admState.discounts.filter(r=>r.situacao==='pendente');
-  $('admDiscountCount').textContent=String(pending.length);
+  $('admDiscountCount').textContent=String(pending.length);nanoSetDiscountAlert(pending.length);
   if(!pending.length){host.append(admNode('p','Nenhuma solicitação pendente.','muted'));return}
   for(const r of pending){
     const order=orderMap.get(r.orcamento_id),client=admState.clients.get(order?.cliente_id)||{},seller=admState.sellers.get(order?.vendedor_id)||{};
-    const card=admNode('div',undefined,'adm-item');
+    const card=admNode('div',undefined,'adm-item nano-discount-pending');
+    card.append(nanoDiscountBadge('pendente'));
     card.append(admNode('strong',client.nome_cliente||'Cliente não identificado'));
     card.append(admNode('p',`Vendedor: ${seller.nome||'Não identificado'} · Desconto solicitado: ${nanoDiscountAmount(r.desconto_solicitado)}`));
     card.append(admNode('p',`Justificativa: ${r.justificativa}`));
@@ -262,11 +286,21 @@ function admRender(){
 async function admReload(){if(profile?.perfil!=='administrador'){return}const p=$('admMessage');p.textContent='Carregando dados da equipe...';try{const [orders,clients,sellers]=await Promise.all([admFetchAll('nano_orcamentos','id,cliente_id,vendedor_id,area_m2,valor_m2,valor_adicional,desconto,valor_total,status,observacoes,created_at'),admFetchAll('nano_clientes','id,nome_cliente,cidade,endereco,responsavel,telefone,observacoes,created_at'),admFetchAll('nano_vendedores','id,nome,created_at')]);admState.orders=orders;admState.stages=await nanoLoadStages(orders.map(o=>o.id));admState.discounts=await nanoLoadDiscounts(orders.map(o=>o.id));admState.clients=new Map(clients.map(o=>[o.id,o]));admState.sellers=new Map(sellers.map(o=>[o.id,o]));admSetOptions('admSeller',sellers.map(o=>[o.id,o.nome]).sort((a,b)=>a[1].localeCompare(b[1])),'Todos');admSetOptions('admCity',[...new Set(clients.map(c=>c.cidade).filter(Boolean))].sort().map(c=>[c,c]),'Todas');admSetOptions('admStatus',nanoStageOptions,'Todas');p.textContent=`${orders.length} orçamento(s) sincronizado(s). Indicadores baseados nos orçamentos com os filtros atuais.`;admRender();nanoRenderPendingRequests()}catch(e){p.textContent='Erro ao consultar painel: '+e.message}}
 $('nanoAdminBtn').onclick=()=>{if(profile?.perfil!=='administrador'){return}const pane=$('nanoAdmin');const opening=pane.style.display!=='block';pane.style.display=opening?'block':'none';$('nanoHistory').style.display='none';if(opening){pane.scrollIntoView({behavior:'smooth'});admReload()}};
 $('admClose').onclick=()=>$('nanoAdmin').style.display='none';$('admReload').onclick=admReload;
+$('nanoDiscountAlert').onclick=async()=>{
+  if(profile?.perfil!=='administrador')return;
+  $('nanoAdmin').style.display='block';$('nanoHistory').style.display='none';
+  await admReload();
+  $('admDiscountSection').scrollIntoView({behavior:'smooth',block:'start'});
+};
+// Atualiza o aviso quando o administrador volta à aba do navegador.
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&profile?.perfil==='administrador'&&navigator.onLine)nanoRefreshDiscountAlert().catch(()=>{});
+});
 $('admReset').onclick=()=>{for(const id of ['admSeller','admCity','admStatus','admSearch','admStart','admEnd'])$(id).value='';admRender()};
 for(const id of ['admSeller','admCity','admStatus','admSearch','admStart','admEnd'])$(id).addEventListener('input',admRender);
 
 $('nanoCloseHistory').onclick=()=>$('nanoHistory').style.display='none';
-window.addEventListener('online',()=>{if(session)msg('Conectado. Use Salvar / sincronizar para enviar fichas pendentes.');});window.addEventListener('offline',()=>{if(session)msg('Sem conexão: seus rascunhos continuam locais.');});
+window.addEventListener('online',()=>{if(session){msg('Conectado. Use Salvar / sincronizar para enviar fichas pendentes.');if(profile?.perfil==='administrador')nanoRefreshDiscountAlert().catch(()=>{});}});window.addEventListener('offline',()=>{if(session)msg('Sem conexão: seus rascunhos continuam locais.');});
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
 boot();
 })();
