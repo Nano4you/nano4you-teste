@@ -118,7 +118,7 @@ async function nanoGenerateProposal(order,kind){
     const number=nanoProposalText(o.numero_orcamento||'Sem numeração - orçamento antigo');
     const money=n=>nanoProposalEscape(nanoDiscountAmount(n));
     const line=(k,val)=>`<div class="detail"><span>${k}</span><b>${val}</b></div>`;
-    const pics=images.length?`<section class="photo-section"><h2>Registro fotográfico da fachada</h2><p class="photo-intro">Imagens registradas durante a vistoria, apresentadas para identificação das condições encontradas.</p><div class="photos ${images.length===1?'photos-single':''}">${images.map((src,i)=>`<figure><img src="${src}" alt="Foto da fachada ${i+1}"><figcaption>Foto ${i+1} · Registro da vistoria</figcaption></figure>`).join('')}</div></section>`:'<p class="muted">Nenhuma fotografia anexada à proposta.</p>';
+    const pics=images.length?`<section class="photo-section"><h2>Registro fotográfico da fachada</h2><p class="photo-intro">Imagens registradas durante a vistoria, apresentadas para identificação das condições encontradas.</p><div class="photos ${images.length===1?'photos-single':''}">${images.map((src,i)=>`<figure><img src="${src}" alt="Foto da fachada ${i+1}"><figcaption>Foto ${i+1} · Registro da vistoria</figcaption></figure>`).join('')}</div></section>`:'';
     const areas=Array.isArray(ficha.trechos)?ficha.trechos.filter(t=>Number(t.largura)>0&&Number(t.altura)>0):[];
     const trHtml=areas.length?`<section><h2>Medições da vistoria</h2><table><thead><tr><th>Trecho</th><th>Largura</th><th>Altura</th><th>Área</th></tr></thead><tbody>${areas.map(t=>`<tr><td>${nanoProposalText(t.local||'Trecho')}</td><td>${nanoProposalText(t.largura)} m</td><td>${nanoProposalText(t.altura)} m</td><td>${(Number(t.largura)*Number(t.altura)).toLocaleString('pt-BR',{maximumFractionDigits:2})} m²</td></tr>`).join('')}</tbody></table></section>`:'';
     const observations=[ficha.condicoes,ficha.obs].filter(x=>String(x||'').trim()).map(x=>`<p>${nanoProposalText(x)}</p>`).join('');
@@ -136,17 +136,17 @@ async function nanoGenerateProposal(order,kind){
       h1{font-size:21px;color:#073a65;margin:20px 0 3px;line-height:1.2}
       h2{font-size:14px;border-bottom:1px solid #b8d5e4;color:#075886;padding-bottom:5px;margin:15px 0 8px}
       p{margin:5px 0}section{break-inside:avoid-page}
-      section.photo-section{break-inside:auto;page-break-inside:auto}
+      section.photo-section{break-inside:auto;page-break-inside:auto} .photo-section h2{break-after:avoid-page}
       .detail{display:flex;justify-content:space-between;gap:14px;padding:4px 0;border-bottom:1px solid #edf0f3}
       .detail span{color:#536a78}.detail b{text-align:right;overflow-wrap:anywhere}
       .cols{display:grid;grid-template-columns:1fr 1fr;gap:10px 20px}
       .total{margin-top:10px;background:#eaf6fa;border-left:5px solid #0874a3;padding:11px 15px;display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:17px;font-weight:bold}
       .total strong{white-space:nowrap}
       .photos{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
-      .photos.photos-single{grid-template-columns:minmax(0,1fr)}
+      .photos.photos-single{grid-template-columns:minmax(0,1fr);max-width:480px;margin:0 auto}
       .photos figure{margin:0;break-inside:avoid;page-break-inside:avoid;border:1px solid #e0e9ef;border-radius:7px;padding:7px;background:#fbfdfe}
       .photos img{display:block;width:100%;height:220px;object-fit:contain;background:#f3f7f9;border-radius:5px}
-      .photos.photos-single img{height:245px}
+      .photos.photos-single img{height:330px}
       .photos figcaption{font-size:11px;color:#536c7d;padding:6px 2px 0}
       .photo-intro{font-size:11px;color:#627786;margin:0 0 9px}
       table{border-collapse:collapse;width:100%;font-size:12px}th,td{border-bottom:1px solid #dce8ee;text-align:left;padding:6px}th{background:#eef6fa}
@@ -168,7 +168,17 @@ async function nanoGenerateProposal(order,kind){
         .detail{padding:3px 0}
         .total{margin-top:8px;padding:9px 13px;font-size:16px}
         .photos img{height:190px}
-        .photos.photos-single img{height:220px}
+        .photos.photos-single img{height:300px}
+        /* Proposta sem fotografias: não deixar o rodapé isolado na página 2. */
+        .sheet.without-photos header{padding:12px 16px}
+        .sheet.without-photos h1{font-size:18px;margin:12px 0 2px}
+        .sheet.without-photos h2{font-size:12.5px;margin:9px 0 5px;padding-bottom:4px}
+        .sheet.without-photos p{margin:3px 0}
+        .sheet.without-photos .detail{padding:2px 0}
+        .sheet.without-photos th,.sheet.without-photos td{padding:4px 6px}
+        .sheet.without-photos .total{margin-top:7px;padding:8px 12px;font-size:15px}
+        .sheet.without-photos .notice{margin-top:8px;padding:7px 9px;font-size:10px}
+        .sheet.without-photos footer{margin-top:10px;padding-top:7px;font-size:10px}
         header,.total,.notice,th{-webkit-print-color-adjust:exact;print-color-adjust:exact}
       }
       @media(max-width:600px){
@@ -177,7 +187,7 @@ async function nanoGenerateProposal(order,kind){
         header{padding:13px}.logo{font-size:22px}
         .total{font-size:15px}
       }
-      </style></head><body><div class="toolbar"><button onclick="window.print()">Imprimir / Salvar em PDF</button><span class="print-tip">Para um PDF limpo, em Mais configurações desmarque “Cabeçalhos e rodapés”. O navegador controla essa opção.</span><button class="secondary" onclick="window.close()">Fechar</button></div><main class="sheet"><header><div><div class="logo">NANO<em>4</em>YOU</div><div class="sub">SOLUÇÕES EM FACHADAS</div></div><div class="headright">(47) 98824-6018<br>Limpeza e revitalização de fachadas</div></header><h1>PROPOSTA COMERCIAL ${full?'COMPLETA':'RESUMIDA'}</h1><p class="muted">Nº ${number} · Registro ${nanoProposalDate(o.created_at)} · Responsável comercial: ${nanoProposalText(v?.nome||'Equipe Nano4You')}</p><section><h2>Dados do cliente</h2><div class="cols"><div>${line('Empresa',nanoProposalText(c.nome_cliente))}${line('Responsável',nanoProposalText(c.responsavel))}</div><div>${line('Telefone',nanoProposalText(c.telefone))}${line('Cidade',nanoProposalText(c.cidade))}</div></div><p><b>Endereço da fachada:</b> ${nanoProposalText(c.endereco)}</p></section><section><h2>Objeto da proposta</h2><p>Prestação de serviços de limpeza e revitalização de fachada, conforme medição e avaliação das condições técnicas, sujeita à confirmação do escopo e das necessidades de segurança e acesso.</p>${full?`<p><b>Material:</b> ${nanoProposalText(ficha.material||'A confirmar')} · <b>Conservação:</b> ${nanoProposalText(ficha.estado||'A confirmar')} · <b>Acesso:</b> ${nanoProposalText(ficha.acesso||'A avaliar')}</p>`:''}</section>${full?trHtml:''}<section><h2>Investimento</h2>${line('Área medida',nanoProposalText(o.area_m2)+' m²')}${line('Valor por m²',money(o.valor_m2))}${line('Valor-base',money(gross))}${additional?line('Custos adicionais',money(additional)):''}${discount?line('Desconto autorizado',`- ${money(discount)}`):''}<div class="total"><span>VALOR TOTAL DA PROPOSTA</span><strong>${money(total)}</strong></div></section><section><h2>Condições comerciais</h2>${line('Prazo estimado',nanoProposalText(ficha.prazo||'A definir'))}${line('Validade da proposta',nanoProposalDate(ficha.validade))}${line('Formas de pagamento',paymentText)}${full&&observations?`<h2>Observações da vistoria</h2>${observations}`:''}</section>${full?pics:''}${imageWarning?`<p class="notice">${nanoProposalText(imageWarning)}</p>`:''}<div class="notice">Proposta preliminar, sujeita à confirmação técnica e às condições de acesso. Serviços em altura dependem de avaliação de segurança. Fotografias registram as condições da visita; eventuais simulações visuais deverão ser identificadas como ilustrativas.</div><footer>Nano4You · Soluções em Fachadas · WhatsApp (47) 98824-6018<br>Documento emitido com os dados e valores registrados no sistema.</footer></main></body></html>`;
+      </style></head><body><div class="toolbar"><button onclick="window.print()">Imprimir / Salvar em PDF</button><span class="print-tip">Para um PDF limpo, em Mais configurações desmarque “Cabeçalhos e rodapés”. O navegador controla essa opção.</span><button class="secondary" onclick="window.close()">Fechar</button></div><main class="sheet ${images.length?'with-photos':'without-photos'}"><header><div><div class="logo">NANO<em>4</em>YOU</div><div class="sub">SOLUÇÕES EM FACHADAS</div></div><div class="headright">(47) 98824-6018<br>Limpeza e revitalização de fachadas</div></header><h1>PROPOSTA COMERCIAL ${full?'COMPLETA':'RESUMIDA'}</h1><p class="muted">Nº ${number} · Registro ${nanoProposalDate(o.created_at)} · Responsável comercial: ${nanoProposalText(v?.nome||'Equipe Nano4You')}</p><section><h2>Dados do cliente</h2><div class="cols"><div>${line('Empresa',nanoProposalText(c.nome_cliente))}${line('Responsável',nanoProposalText(c.responsavel))}</div><div>${line('Telefone',nanoProposalText(c.telefone))}${line('Cidade',nanoProposalText(c.cidade))}</div></div><p><b>Endereço da fachada:</b> ${nanoProposalText(c.endereco)}</p></section><section><h2>Objeto da proposta</h2><p>Prestação de serviços de limpeza e revitalização de fachada, conforme medição e avaliação das condições técnicas, sujeita à confirmação do escopo e das necessidades de segurança e acesso.</p>${full?`<p><b>Material:</b> ${nanoProposalText(ficha.material||'A confirmar')} · <b>Conservação:</b> ${nanoProposalText(ficha.estado||'A confirmar')} · <b>Acesso:</b> ${nanoProposalText(ficha.acesso||'A avaliar')}</p>`:''}</section>${full?trHtml:''}<section><h2>Investimento</h2>${line('Área medida',nanoProposalText(o.area_m2)+' m²')}${line('Valor por m²',money(o.valor_m2))}${line('Valor-base',money(gross))}${additional?line('Custos adicionais',money(additional)):''}${discount?line('Desconto autorizado',`- ${money(discount)}`):''}<div class="total"><span>VALOR TOTAL DA PROPOSTA</span><strong>${money(total)}</strong></div></section><section><h2>Condições comerciais</h2>${line('Prazo estimado',nanoProposalText(ficha.prazo||'A definir'))}${line('Validade da proposta',nanoProposalDate(ficha.validade))}${line('Formas de pagamento',paymentText)}${full&&observations?`<h2>Observações da vistoria</h2>${observations}`:''}</section>${full?pics:''}${imageWarning?`<p class="notice">${nanoProposalText(imageWarning)}</p>`:''}<div class="notice">Proposta preliminar, sujeita à confirmação técnica e às condições de acesso. Serviços em altura dependem de avaliação de segurança. Fotografias registram as condições da visita; eventuais simulações visuais deverão ser identificadas como ilustrativas.</div><footer>Nano4You · Soluções em Fachadas · WhatsApp (47) 98824-6018<br>Documento emitido com os dados e valores registrados no sistema.</footer></main></body></html>`;
     popup.document.open();popup.document.write(content);popup.document.close();
   }catch(e){popup.document.body.textContent='Não foi possível preparar a proposta: '+e.message;alert('Falha ao gerar a proposta: '+e.message)}
 }
