@@ -31,7 +31,19 @@ async function login(){const text=$('nanoLoginMsg');text.textContent='';if(!read
 async function boot(){try{if(!ready)throw Error('Configure config.js com URL e chave publicável do Supabase.');session=JSON.parse(localStorage.getItem(sessionKey)||'null');if(!session)return;await loadProfile();showApp()}catch(e){if(session&&!navigator.onLine){const p=JSON.parse(localStorage.getItem('nano4you_cached_profile_'+session.user.id)||'null');if(p){profile=p;showApp();msg('Offline: somente rascunho; sincronização exige internet.');return}}hideApp();$('nanoLoginMsg').textContent=e.message;session=null;localStorage.removeItem(sessionKey)}}
 // Cache profile only after successful authentication; local drafts never uploaded without active session.
 const oldShow=showApp;showApp=function(){oldShow();if(navigator.onLine&&profile)localStorage.setItem('nano4you_cached_profile_'+session.user.id,JSON.stringify(profile))};
-function validate(d){for(const [key,label] of [['cliente','nome da empresa'],['endereco','endereço'],['whatsapp','telefone / WhatsApp'],['responsavel','nome do responsável']]){if(!String(d[key]||'').trim()){const field=$(key);field?.focus();throw Error('Preencha o campo obrigatório: '+label+'.');}}const v=S.recalc();if(!(v.area>0))throw Error('Informe largura e altura dos trechos.');if(!profile)throw Error('Faça login antes de salvar.');if(profile.perfil!=='administrador'&&(Number(d.preco)!==85||Number(d.desconto)!==0||Number(d.adicionais)!==0))throw Error('Preço e descontos são exclusivos do administrador.');return v}
+const nanoRequiredFields=[['cliente','Nome da empresa'],['endereco','Endereço'],['whatsapp','Telefone / WhatsApp'],['responsavel','Nome do responsável']];
+function nanoMarkRequiredErrors(missing){
+ const box=$('nanoRequiredErrors');
+ for(const [key] of nanoRequiredFields){const el=$(key);if(!el)continue;const bad=missing.some(x=>x[0]===key);el.classList.toggle('nano-required-invalid',bad);el.setAttribute('aria-invalid',bad?'true':'false');const label=document.querySelector('label[for="'+key+'"]');label?.classList.toggle('nano-required-label-error',bad)}
+ if(!box)return;
+ box.replaceChildren();
+ if(!missing.length){box.style.display='none';return}
+ const intro=document.createElement('strong');intro.textContent='Para salvar, preencha os seguintes campos obrigatórios:';
+ const list=document.createElement('ul');for(const [,label] of missing){const item=document.createElement('li');item.textContent=label;list.append(item)}
+ box.append(intro,list);box.style.display='block';
+}
+for(const [key] of nanoRequiredFields){$(key)?.addEventListener('input',()=>{const missing=nanoRequiredFields.filter(([id])=>!$(id)?.value.trim());nanoMarkRequiredErrors(missing)})}
+function validate(d){const missing=nanoRequiredFields.filter(([key])=>!String(d[key]||'').trim());nanoMarkRequiredErrors(missing);if(missing.length){$(missing[0][0])?.focus();throw Error('Faltam '+missing.length+' campo(s) obrigatório(s), destacados em vermelho no cadastro.');}const v=S.recalc();if(!(v.area>0))throw Error('Informe largura e altura dos trechos.');if(!profile)throw Error('Faça login antes de salvar.');if(profile.perfil!=='administrador'&&(Number(d.preco)!==85||Number(d.desconto)!==0||Number(d.adicionais)!==0))throw Error('Preço e descontos são exclusivos do administrador.');return v}
 function queue(){try{return JSON.parse(localStorage.getItem(pendingKey())||'[]')}catch{return []}}
 function setQueue(q){localStorage.setItem(pendingKey(),JSON.stringify(q))}
 // Fotos são guardadas em IndexedDB para sobreviver a recargas e períodos offline.
